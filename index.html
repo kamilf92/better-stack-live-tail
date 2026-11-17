@@ -1,0 +1,1574 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Better Stack Telemetry — Live tail</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Inter', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          },
+          colors: {
+            bs: {
+              bg: '#131620',
+              sidebar: '#151923',
+              subnav: '#181c27',
+              surface: '#1e2332',
+              surfaceHover: '#242a3b',
+              border: '#242a3a',
+              borderLight: '#31394f',
+              text: '#e2e6f0',
+              muted: '#8b94ab',
+              dim: '#5e677e',
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      background-color: #131620;
+      color: #e2e6f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #2a3145;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3a445e;
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% {
+        box-shadow: 0 0 18px rgba(99, 102, 241, 0.35), 0 8px 24px rgba(0, 0, 0, 0.6);
+      }
+      50% {
+        box-shadow: 0 0 28px rgba(139, 92, 246, 0.6), 0 10px 28px rgba(0, 0, 0, 0.7);
+      }
+    }
+    .ai-fab-glow {
+      animation: pulseGlow 3.2s infinite ease-in-out;
+    }
+
+    @keyframes bounceDot {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+    .typing-dot {
+      animation: bounceDot 1.3s infinite ease-in-out both;
+    }
+    .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+    .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes rowFlash {
+      0% { background-color: rgba(99, 102, 241, 0.22); }
+      100% { background-color: transparent; }
+    }
+    .new-log-row {
+      animation: rowFlash 2s ease-out;
+    }
+
+    /* AI Assistant Markdown & Structured Table Styles */
+    .ai-markdown p {
+      margin-bottom: 0.65rem;
+      line-height: 1.55;
+    }
+    .ai-markdown p:last-child {
+      margin-bottom: 0;
+    }
+    .ai-markdown strong {
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .ai-markdown code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.72rem;
+      background-color: #21273a;
+      border: 1px solid #323b56;
+      color: #a5b4fc;
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.3rem;
+    }
+    .ai-markdown ul {
+      list-style-type: disc;
+      margin: 0.4rem 0 0.75rem 1.15rem;
+    }
+    .ai-markdown li {
+      margin-bottom: 0.3rem;
+      line-height: 1.48;
+    }
+    .ai-markdown table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.74rem;
+    }
+    .ai-markdown th {
+      text-align: left;
+      padding: 0.45rem 0.6rem;
+      background-color: #1c2233;
+      color: #cbd5e1;
+      font-weight: 600;
+      border-bottom: 1px solid #2e3750;
+    }
+    .ai-markdown td {
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid #232a3d;
+      color: #e2e6f0;
+      vertical-align: top;
+    }
+    .ai-markdown tr:last-child td {
+      border-bottom: none;
+    }
+  </style>
+</head>
+<body class="h-screen w-screen flex select-none antialiased text-[13px]">
+
+  <!-- ==================== 1. PRIMARY LEFT NAVIGATION SIDEBAR ==================== -->
+  <aside id="primarySidebar" class="w-[180px] shrink-0 bg-[#151923] border-r border-[#242a3a] flex flex-col justify-between hidden lg:flex">
+    <div>
+      <!-- Brand Header -->
+      <div class="h-12 px-4 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-5 h-5 rounded bg-gradient-to-tr from-indigo-500 to-violet-400 flex items-center justify-center shadow-xs">
+            <svg class="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M4 6l8-4 8 4-8 4-8-4zm0 6l8 4 8-4v3l-8 4-8-4v-3zm0 5l8 4 8-4v3l-8 4-8-4v-3z"/>
+            </svg>
+          </div>
+          <span class="font-semibold text-[14px] text-white tracking-tight">Better Stack</span>
+        </div>
+        <button title="Collapse sidebar" class="text-[#5e677e] hover:text-[#cbd5e1] p-1 rounded transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <line x1="9" y1="4" x2="9" y2="20" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Primary Nav Items -->
+      <nav class="px-2.5 pt-2 space-y-0.5">
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+          </svg>
+          <span>AI SRE</span>
+        </a>
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+          </svg>
+          <span>Incidents</span>
+        </a>
+        <!-- Active Telemetry Card Highlight -->
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md bg-[#222839] text-white font-medium border border-[#2f374f]/70 shadow-xs">
+          <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5"/>
+          </svg>
+          <span>Telemetry</span>
+        </a>
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+          </svg>
+          <span>Error tracking</span>
+        </a>
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/>
+          </svg>
+          <span>Real user monitoring</span>
+        </a>
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          <span>Settings</span>
+        </a>
+      </nav>
+    </div>
+
+    <!-- Bottom Utility Links -->
+    <div class="px-2.5 pb-3 space-y-0.5 text-[12px]">
+      <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+        <span>Notifications</span>
+      </a>
+      <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>
+        <span>Support</span>
+      </a>
+      <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
+        <span>Book a demo</span>
+      </a>
+      <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/></svg>
+        <span>Theme</span>
+      </a>
+      <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>
+        <span>Command palette</span>
+      </a>
+      <div class="pt-2 mt-2 border-t border-[#242a3a] space-y-0.5">
+        <a href="#" onclick="return false;" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#1e2332] transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+          <span>We are hiring</span>
+        </a>
+        <div class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[#cbd5e1] hover:bg-[#1e2332] cursor-pointer transition">
+          <span class="w-4 h-4 rounded bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 text-[10px] font-bold flex items-center justify-center">T</span>
+          <span class="truncate">Your team</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== 2. SECONDARY TELEMETRY SUB-NAVIGATION ==================== -->
+  <aside id="subSidebar" class="w-[170px] shrink-0 bg-[#181c27] border-r border-[#242a3a] flex flex-col hidden md:flex">
+    <div class="h-12 px-4 flex items-center justify-between">
+      <span class="font-semibold text-[14px] text-white">Telemetry</span>
+      <button title="Toggle sub-navigation" class="text-[#5e677e] hover:text-[#cbd5e1] p-1 rounded transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <line x1="9" y1="4" x2="9" y2="20" />
+        </svg>
+      </button>
+    </div>
+
+    <nav class="px-2.5 pt-1 space-y-0.5">
+      <a href="#" onclick="return false;" class="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#202636] transition">
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/></svg>
+          <span>Sources</span>
+        </div>
+        <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+      </a>
+
+      <!-- Active Live tail highlight -->
+      <a href="#" onclick="return false;" class="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-[#23293a] text-white font-medium border border-[#313952]/80 shadow-xs">
+        <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/></svg>
+        <span>Live tail</span>
+      </a>
+
+      <a href="#" onclick="return false;" class="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#202636] transition">
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
+          <span>Events</span>
+        </div>
+        <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+      </a>
+
+      <a href="#" onclick="return false;" class="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#202636] transition">
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+          <span>Metrics</span>
+        </div>
+        <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+      </a>
+
+      <a href="#" onclick="return false;" class="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#202636] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>
+        <span>Alerts</span>
+      </a>
+
+      <a href="#" onclick="return false;" class="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#202636] transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H6A2.25 2.25 0 003.75 6v2.25A2.25 2.25 0 006 10.5zm0 9.75h2.25A2.25 2.25 0 0010.5 18v-2.25a2.25 2.25 0 00-2.25-2.25H6a2.25 2.25 0 00-2.25 2.25V18A2.25 2.25 0 006 20.25zm9.75-9.75H18a2.25 2.25 0 002.25-2.25V6A2.25 2.25 0 0018 3.75h-2.25A2.25 2.25 0 0013.5 6v2.25a2.25 2.25 0 002.25 2.25z"/></svg>
+        <span>Integrations</span>
+      </a>
+    </nav>
+  </aside>
+
+  <!-- ==================== 3. MAIN WORKSPACE + RIGHT AI SIDEBAR ==================== -->
+  <div class="flex-1 flex min-w-0 h-screen overflow-hidden relative">
+
+    <!-- MAIN TELEMETRY LIVE TAIL WORKSPACE -->
+    <main class="flex-1 flex flex-col min-w-0 bg-[#131620] overflow-hidden">
+
+      <!-- TOP FILTER & ACTION BAR -->
+      <header class="min-h-[48px] px-3 py-1.5 border-b border-[#242a3a] bg-[#161a25] flex flex-wrap items-center gap-2 shrink-0">
+        <!-- Presets Dropdown -->
+        <div class="relative">
+          <button id="presetsBtn" onclick="togglePresetsMenu()" class="h-8 px-2.5 rounded-md bg-[#1e2332] hover:bg-[#252b3d] border border-[#2d3548] text-[#cbd5e1] flex items-center gap-1.5 text-[12px] font-medium transition">
+            <svg class="w-3.5 h-3.5 text-[#8b94ab]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"/></svg>
+            <span id="activePresetLabel">Presets</span>
+            <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+          </button>
+
+          <!-- Presets Dropdown Menu -->
+          <div id="presetsMenu" class="hidden absolute left-0 mt-1.5 w-64 rounded-lg bg-[#1c2130] border border-[#303952] shadow-2xl py-1 z-40 text-[12px]">
+            <div class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#5e677e]">Saved Telemetry Presets</div>
+            <button onclick="applyPreset('All flights', '')" class="w-full text-left px-3 py-1.5 hover:bg-[#262d42] text-[#e2e6f0] flex items-center justify-between">
+              <span>All flights</span>
+              <span class="text-[10.5px] text-[#626b82]">Reset</span>
+            </button>
+            <button onclick="applyPreset('Landed ahead of schedule', 'ahead of schedule')" class="w-full text-left px-3 py-1.5 hover:bg-[#262d42] text-[#e2e6f0] flex items-center justify-between">
+              <span>Landed ahead of schedule</span>
+              <span class="text-[10.5px] text-emerald-400">Early</span>
+            </button>
+            <button onclick="applyPreset('Departed flights', 'departed')" class="w-full text-left px-3 py-1.5 hover:bg-[#262d42] text-[#e2e6f0] flex items-center justify-between">
+              <span>Departed flights</span>
+              <span class="text-[10.5px] text-indigo-400">En route</span>
+            </button>
+            <button onclick="applyPreset('Southwest (WN) flights', 'WN')" class="w-full text-left px-3 py-1.5 hover:bg-[#262d42] text-[#e2e6f0] flex items-center justify-between">
+              <span>Southwest (WN) flights</span>
+              <span class="text-[10.5px] text-[#8b94ab]">airline:WN</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Source Selector Badge -->
+        <div class="h-8 px-2.5 rounded-md bg-[#1e2332] border border-[#2d3548] flex items-center gap-2 text-[12px] text-[#e2e6f0]">
+          <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+          <span class="font-medium truncate max-w-[190px]">Onboarding • Real-time flights</span>
+          <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+        </div>
+
+        <!-- Search Input Box -->
+        <div class="flex-1 min-w-[170px] h-8 rounded-md bg-[#1a1f2d] border border-[#2d3548] focus-within:border-indigo-500/80 flex items-center px-2.5 gap-2 transition">
+          <input
+            id="searchInput"
+            type="text"
+            placeholder="Search"
+            class="w-full bg-transparent text-[12px] text-[#e2e6f0] placeholder-[#5e677e] focus:outline-none font-mono"
+            oninput="handleSearchInput(this.value)"
+          />
+          <button id="clearSearchBtn" onclick="clearSearch()" class="hidden text-[#626b82] hover:text-white text-xs px-1" title="Clear search">✕</button>
+        </div>
+
+        <!-- Right Controls: Time Range, Magnifier, Scroll to, + Emit Log, Command, Settings -->
+        <div class="flex items-center gap-1.5">
+          <!-- Last 30 days + Magnifier -->
+          <div class="flex items-center rounded-md bg-[#1e2332] border border-[#2d3548] overflow-hidden h-8">
+            <select id="timeRangeSelect" onchange="handleTimeRangeChange(this.value)" class="bg-transparent text-[#cbd5e1] text-[12px] px-2.5 h-full focus:outline-none cursor-pointer">
+              <option value="Last 30 days" class="bg-[#1e2332]">Last 30 days</option>
+              <option value="Last 7 days" class="bg-[#1e2332]">Last 7 days</option>
+              <option value="Last 24 hours" class="bg-[#1e2332]">Last 24 hours</option>
+              <option value="Last 1 hour" class="bg-[#1e2332]">Last 1 hour</option>
+            </select>
+            <button onclick="renderLogTable()" class="h-full px-2.5 border-l border-[#2d3548] hover:bg-[#283044] text-[#cbd5e1] transition" title="Run search">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+            </button>
+          </div>
+
+          <!-- Scroll to button -->
+          <button onclick="scrollToLatestLog()" class="h-8 px-2.5 rounded-md bg-[#1e2332] hover:bg-[#252b3d] border border-[#2d3548] text-[#cbd5e1] flex items-center gap-1.5 text-[12px] transition" title="Scroll to latest telemetry row">
+            <svg class="w-3.5 h-3.5 text-[#8b94ab]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>Scroll to</span>
+            <svg class="w-3 h-3 text-[#5e677e]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+          </button>
+
+          <!-- + Emit Log button -->
+          <button onclick="simulateNewFlightEvent()" title="Simulate incoming flight telemetry log row" class="h-8 px-2.5 rounded-md bg-[#1e2332] hover:bg-[#272f44] border border-[#313b54] text-indigo-300 hover:text-white transition flex items-center gap-1 text-[11.5px] font-medium">
+            <span>+ Emit Log</span>
+          </button>
+
+          <!-- Command Icon -->
+          <button title="Command palette (⌘K)" class="h-8 w-8 rounded-md bg-[#1e2332] hover:bg-[#252b3d] border border-[#2d3548] text-[#8b94ab] hover:text-white flex items-center justify-center transition hidden sm:flex">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 3a3 3 0 00-3 3v12a3 3 0 003 3 3 3 0 003-3 3 3 0 00-3-3H6a3 3 0 00-3 3 3 3 0 003 3 3 3 0 003-3V6a3 3 0 00-3-3 3 3 0 00-3 3 3 3 0 003 3h12a3 3 0 003-3 3 3 0 00-3-3z"/></svg>
+          </button>
+
+          <!-- Settings Gear Icon -->
+          <button title="Tail settings" class="h-8 w-8 rounded-md bg-[#1e2332] hover:bg-[#252b3d] border border-[#2d3548] text-[#8b94ab] hover:text-white flex items-center justify-center transition hidden sm:flex">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- TIMELINE HISTOGRAM CHART (Oct 21 to Nov 17, 0 to 150) -->
+      <section class="px-4 pt-2.5 pb-2 border-b border-[#242a3a] bg-[#141824] shrink-0">
+        <div class="relative h-[68px] w-full flex">
+          <!-- Y-axis labels -->
+          <div class="w-7 flex flex-col justify-between text-[9px] font-mono text-[#525b70] pr-1.5 text-right pb-3.5 select-none">
+            <span>150</span>
+            <span>120</span>
+            <span>90</span>
+            <span>60</span>
+            <span>30</span>
+            <span>0</span>
+          </div>
+
+          <!-- Grid & Interactive Bars -->
+          <div class="flex-1 flex flex-col relative">
+            <div id="histogramGrid" class="relative flex-1 border-b border-[#242a3a] flex items-end justify-between px-1">
+              <!-- Horizontal gridlines -->
+              <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+                <div class="border-t border-[#1e2332] w-full"></div>
+                <div class="border-t border-[#1e2332] w-full"></div>
+                <div class="border-t border-[#1e2332] w-full"></div>
+                <div class="border-t border-[#1e2332] w-full"></div>
+                <div class="border-t border-[#1e2332] w-full"></div>
+              </div>
+              <!-- Bars rendered by JS -->
+            </div>
+
+            <!-- Histogram hover tooltip -->
+            <div id="histTooltip" class="hidden absolute top-0 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-[#1e2436] border border-[#354060] text-[10px] font-mono text-indigo-200 pointer-events-none shadow-md z-10"></div>
+
+            <!-- X-axis date labels -->
+            <div class="h-3.5 flex items-center justify-between text-[9px] font-mono text-[#525b70] pt-1 px-2">
+              <span>Oct 21</span>
+              <span>Oct 25</span>
+              <span>Oct 29</span>
+              <span>Nov 1</span>
+              <span>Nov 3</span>
+              <span>Nov 5</span>
+              <span>Nov 9</span>
+              <span>Nov 13</span>
+              <span class="text-[#8b94ab]">Nov 17</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOG TABLE HEADER -->
+      <div class="grid grid-cols-12 px-4 py-2 border-b border-[#242a3a] bg-[#161a26] text-[11px] font-medium text-[#8b94ab] shrink-0">
+        <div class="col-span-3 sm:col-span-2">Time</div>
+        <div class="col-span-9 sm:col-span-5">Message</div>
+        <div class="hidden sm:block sm:col-span-2">Source</div>
+        <div class="hidden lg:block lg:col-span-1">Origin</div>
+        <div class="hidden lg:block lg:col-span-1">Destination</div>
+        <div class="hidden sm:flex sm:col-span-3 lg:col-span-1 items-center justify-between">
+          <span>airline</span>
+          <span id="visibleCountBadge" class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#22283a] text-indigo-300">17</span>
+        </div>
+      </div>
+
+      <!-- SCROLLABLE TELEMETRY LOG TABLE -->
+      <div id="logTableBody" class="flex-1 overflow-y-auto divide-y divide-[#1e2332] font-mono text-[11.5px]">
+        <!-- Rows populated via JS -->
+      </div>
+
+      <!-- BOTTOM STATUS BAR -->
+      <footer class="h-7 px-4 border-t border-[#242a3a] bg-[#161a25] flex items-center justify-between text-[11px] text-[#8b94ab] shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+          <span>Waiting for new rows...</span>
+        </div>
+        <div class="text-[10px] font-mono text-[#5e677e] hidden sm:block">
+          team/t628261 • tail?s=l2821237
+        </div>
+      </footer>
+    </main>
+
+    <!-- ==================== 4. RIGHT-SIDE AI ASSISTANT CONVERSATION SIDEBAR ==================== -->
+    <aside
+      id="aiSidebar"
+      class="w-0 opacity-0 pointer-events-none transition-all duration-300 ease-out border-l border-[#272d3d] bg-[#161a26] flex flex-col shrink-0 overflow-hidden z-30 shadow-2xl"
+      style="max-width: 100vw;"
+    >
+      <div class="w-[380px] sm:w-[420px] h-full flex flex-col bg-[#161a26]">
+
+        <!-- Sidebar Header (Inspired by Screenshot 2) -->
+        <div class="px-4 py-3 border-b border-[#242a3a] bg-[#181d2a] flex items-center justify-between gap-2 shrink-0">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <!-- Thread Menu Button -->
+            <button onclick="resetConversation()" title="Start new conversation" class="p-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#23293a] transition shrink-0">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+              </svg>
+            </button>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <h2 id="sidebarConvTitle" class="text-[13px] font-semibold text-white truncate">
+                  Live tail • Real-time flights
+                </h2>
+                <span class="px-1.5 py-0.5 text-[9px] font-semibold tracking-wider uppercase rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
+                  TECHNICAL PREVIEW
+                </span>
+              </div>
+              <p class="text-[11px] text-[#8b94ab] truncate">Better Stack AI Assistant</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1 shrink-0">
+            <button onclick="resetConversation()" title="New thread" class="p-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#23293a] transition">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+              </svg>
+            </button>
+            <button onclick="toggleAiSidebar(false)" title="Close AI Assistant" class="p-1.5 rounded-md text-[#8b94ab] hover:text-white hover:bg-[#23293a] transition">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Date Divider -->
+        <div class="py-2 text-center border-b border-[#1f2433] bg-[#141823]">
+          <span class="text-[10.5px] font-medium text-[#626b82]">Tuesday, November 17, 2026</span>
+        </div>
+
+        <!-- Chat Messages Stream -->
+        <div id="chatMessages" class="flex-1 overflow-y-auto px-4 py-4 space-y-5 select-text">
+          <!-- Initial Welcome & Quick Prompts -->
+          <div id="chatWelcomeState" class="space-y-4">
+            <div class="p-3.5 rounded-xl bg-[#1c2130] border border-[#2a3247] space-y-2">
+              <div class="flex items-center gap-2 text-indigo-300 font-medium text-[12.5px]">
+                <svg class="w-4 h-4 text-indigo-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+                </svg>
+                <span>Full-Page Screen Context Active</span>
+              </div>
+              <p class="text-[12px] text-[#9aa3ba] leading-relaxed">
+                Ask questions about the flight logs, histogram spikes, search filters, or visible rows currently on your <strong class="text-white">Live tail</strong> screen.
+              </p>
+            </div>
+
+            <!-- 4 Quick-Prompt Chips -->
+            <div class="space-y-2">
+              <div class="text-[11px] font-medium text-[#626b82] uppercase tracking-wider px-0.5">Suggested questions</div>
+              <div class="flex flex-col gap-1.5">
+                <button onclick="sendSuggestedPrompt('Summarize current screen flights')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                  <span>Summarize current screen flights</span>
+                  <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+                </button>
+                <button onclick="sendSuggestedPrompt('Which flights landed ahead of schedule?')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                  <span>Which flights landed ahead of schedule?</span>
+                  <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+                </button>
+                <button onclick="sendSuggestedPrompt('Breakdown by airline & aircraft')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                  <span>Breakdown by airline &amp; aircraft</span>
+                  <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+                </button>
+                <button onclick="sendSuggestedPrompt('Any anomalies or delays?')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                  <span>Any anomalies or delays?</span>
+                  <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Prompt Box with Dynamic Context Awareness Pill -->
+        <div class="p-3 border-t border-[#242a3a] bg-[#161a26] shrink-0">
+          <div class="rounded-xl bg-[#1b202e] border border-[#2e364d] focus-within:border-indigo-500/80 p-2.5 shadow-inner transition">
+            <!-- Dynamic Context Pill -->
+            <div class="flex items-center justify-between mb-2">
+              <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#23293b] border border-[#343d56] text-[11px] text-[#cbd5e1] max-w-full">
+                <svg class="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+                </svg>
+                <span id="contextPillText" class="truncate font-medium">Live tail · Onboarding • Real-time flights (17 visible rows)</span>
+              </div>
+            </div>
+
+            <!-- Input Textarea + Submit Arrow -->
+            <div class="flex items-end gap-2">
+              <textarea
+                id="aiPromptInput"
+                rows="2"
+                placeholder="Ask anything"
+                class="w-full bg-transparent text-[12.5px] text-white placeholder-[#5e677e] focus:outline-none resize-none leading-snug"
+                onkeydown="handlePromptKeydown(event)"
+              ></textarea>
+              <button
+                id="sendPromptBtn"
+                onclick="submitUserPrompt()"
+                class="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center shrink-0 transition shadow-sm"
+                title="Send question"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ==================== 5. BOTTOM-RIGHT FLOATING 'AI AGENT' BUTTON ==================== -->
+    <button
+      id="aiAgentFab"
+      onclick="toggleAiSidebar(true)"
+      class="fixed bottom-5 right-5 z-40 flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-gradient-to-r from-[#232842] via-[#2b3054] to-[#342e5e] hover:from-[#2c3354] hover:to-[#3f3773] text-white border border-indigo-400/50 ai-fab-glow transition-all duration-200 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+      title="Open Better Stack AI Assistant"
+    >
+      <span class="w-5 h-5 rounded-full bg-indigo-500/30 border border-indigo-400/50 flex items-center justify-center text-indigo-200 group-hover:text-white transition">
+        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
+        </svg>
+      </span>
+      <span class="font-semibold text-[13px] tracking-tight">AI Agent</span>
+      <span class="px-1.5 py-0.2 rounded-full bg-indigo-500/25 border border-indigo-400/30 text-[10px] font-medium text-indigo-200">
+        Live
+      </span>
+    </button>
+
+  </div>
+
+  <!-- ==================== CLIENT-SIDE TELEMETRY & AI CONTEXT ENGINE ==================== -->
+  <script>
+    // Exact 17 flight telemetry rows from Screenshot 1
+    const INITIAL_LOGS = [
+      {
+        id: 'LH5234',
+        time: '2026-11-17 10:05:49.596 CET',
+        airline: 'LH',
+        airlineName: 'Lufthansa',
+        aircraft: 'Boeing 777-200',
+        origin: 'Heathrow (LHR)',
+        destination: 'Los Angeles International (LAX)',
+        status: 'landed',
+        earlyMinutes: 14,
+        fullText: 'Lufthansa Boeing 777-200 flight LH5234 from Heathrow (LHR) landed at Los Angeles International (LAX) 14 minutes ahead of schedule.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'UA6470',
+        time: '2026-11-17 10:05:50.246 CET',
+        airline: 'UA',
+        airlineName: 'United Airlines',
+        aircraft: 'Airbus A350-1000',
+        origin: 'Schiphol (AMS)',
+        destination: 'Changi (SIN)',
+        status: 'landed',
+        earlyMinutes: 15,
+        fullText: 'United Airlines Airbus A350-1000 flight UA6470 from Schiphol (AMS) landed at Changi (SIN) 15 minutes ahead of schedule.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'AY8615',
+        time: '2026-11-17 10:05:50.895 CET',
+        airline: 'AY',
+        airlineName: 'Finnair',
+        aircraft: 'Boeing 787-9',
+        origin: 'Miami International (MIA)',
+        destination: 'Madrid Barajas (MAD)',
+        status: 'landed',
+        earlyMinutes: 0,
+        fullText: 'Finnair Boeing 787-9 flight AY8615 from Miami International (MIA) landed at Madrid Barajas (MAD).',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'QR9066',
+        time: '2026-11-17 10:05:51.548 CET',
+        airline: 'QR',
+        airlineName: 'Qatar Airways',
+        aircraft: 'Boeing 787-9',
+        origin: 'Heathrow (LHR)',
+        destination: 'Copenhagen Kastrup (CPH)',
+        status: 'departed',
+        eta: '3:29 PM UTC',
+        fullText: 'Qatar Airways Boeing 787-9 flight QR9066 departed Heathrow (LHR) on route to Copenhagen Kastrup (CPH) estimated arrival at 3:29 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'DL8422',
+        time: '2026-11-17 10:05:52.210 CET',
+        airline: 'DL',
+        airlineName: 'Delta Air Lines',
+        aircraft: 'Airbus A330-300',
+        origin: 'Munich Airport (MUC)',
+        destination: 'Miami International (MIA)',
+        status: 'departed',
+        eta: '4:39 PM UTC',
+        fullText: 'Delta Air Lines Airbus A330-300 flight DL8422 departed Munich Airport (MUC) on route to Miami International (MIA) estimated arrival at 4:39 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'B67384',
+        time: '2026-11-17 10:05:52.862 CET',
+        airline: 'B6',
+        airlineName: 'JetBlue Airways',
+        aircraft: 'Airbus A321neo',
+        origin: 'Changi (SIN)',
+        destination: 'Madrid Barajas (MAD)',
+        status: 'departed',
+        eta: '2:58 PM UTC',
+        fullText: 'JetBlue Airways Airbus A321neo flight B67384 departed Changi (SIN) on route to Madrid Barajas (MAD) estimated arrival at 2:58 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'QF5903',
+        time: '2026-11-17 10:05:53.517 CET',
+        airline: 'QF',
+        airlineName: 'Qantas',
+        aircraft: 'Airbus A350-900',
+        origin: 'Phoenix Sky Harbor International (PHX)',
+        destination: 'Munich Airport (MUC)',
+        status: 'departed',
+        eta: '11:10 AM UTC',
+        fullText: 'Qantas Airbus A350-900 flight QF5903 departed Phoenix Sky Harbor International (PHX) on route to Munich Airport (MUC) estimated arrival at 11:10 AM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'WN9044',
+        time: '2026-11-17 10:05:57.175 CET',
+        airline: 'WN',
+        airlineName: 'Southwest Airlines',
+        aircraft: 'Airbus A321neo',
+        origin: 'Changi (SIN)',
+        destination: 'Miami International (MIA)',
+        status: 'landed',
+        earlyMinutes: 0,
+        fullText: 'Southwest Airlines Airbus A321neo flight WN9044 from Changi (SIN) landed at Miami International (MIA).',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'WN5896',
+        time: '2026-11-17 10:05:57.836 CET',
+        airline: 'WN',
+        airlineName: 'Southwest Airlines',
+        aircraft: 'Boeing 787-10',
+        origin: 'Miami International (MIA)',
+        destination: 'Copenhagen Kastrup (CPH)',
+        status: 'landed',
+        earlyMinutes: 0,
+        fullText: 'Southwest Airlines Boeing 787-10 flight WN5896 from Miami International (MIA) landed at Copenhagen Kastrup (CPH).',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'EY2695',
+        time: '2026-11-17 10:05:58.491 CET',
+        airline: 'EY',
+        airlineName: 'Etihad Airways',
+        aircraft: 'Airbus A330-200',
+        origin: 'Schiphol (AMS)',
+        destination: 'Copenhagen Kastrup (CPH)',
+        status: 'landed',
+        earlyMinutes: 3,
+        fullText: 'Etihad Airways Airbus A330-200 flight EY2695 from Schiphol (AMS) landed at Copenhagen Kastrup (CPH) 3 minutes ahead of schedule.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'A32438',
+        time: '2026-11-17 10:05:59.144 CET',
+        airline: 'A3',
+        airlineName: 'Aegean Airlines',
+        aircraft: 'Airbus A330-300',
+        origin: 'Schiphol (AMS)',
+        destination: 'Miami International (MIA)',
+        status: 'landed',
+        earlyMinutes: 0,
+        fullText: 'Aegean Airlines Airbus A330-300 flight A32438 from Schiphol (AMS) landed at Miami International (MIA).',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'WN3648',
+        time: '2026-11-17 10:05:59.800 CET',
+        airline: 'WN',
+        airlineName: 'Southwest Airlines',
+        aircraft: 'Airbus A330-200',
+        origin: 'Munich Airport (MUC)',
+        destination: 'Copenhagen Kastrup (CPH)',
+        status: 'landed',
+        earlyMinutes: 0,
+        fullText: 'Southwest Airlines Airbus A330-200 flight WN3648 from Munich Airport (MUC) landed at Copenhagen Kastrup (CPH).',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'EK7213',
+        time: '2026-11-17 10:06:01.285 CET',
+        airline: 'EK',
+        airlineName: 'Emirates',
+        aircraft: 'Bombardier CRJ-900',
+        origin: 'Phoenix Sky Harbor International (PHX)',
+        destination: 'Los Angeles International (LAX)',
+        status: 'departed',
+        eta: '2:08 PM UTC',
+        fullText: 'Emirates Bombardier CRJ-900 flight EK7213 departed Phoenix Sky Harbor International (PHX) on route to Los Angeles International (LAX) estimated arrival at 2:08 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'AF7177',
+        time: '2026-11-17 10:06:01.940 CET',
+        airline: 'AF',
+        airlineName: 'Air France',
+        aircraft: 'Airbus A350-900',
+        origin: 'Munich Airport (MUC)',
+        destination: 'Miami International (MIA)',
+        status: 'departed',
+        eta: '12:08 PM UTC',
+        fullText: 'Air France Airbus A350-900 flight AF7177 departed Munich Airport (MUC) on route to Miami International (MIA) estimated arrival at 12:08 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'FR7013',
+        time: '2026-11-17 10:06:05.906 CET',
+        airline: 'FR',
+        airlineName: 'Ryanair',
+        aircraft: 'Airbus A321neo',
+        origin: 'Madrid Barajas (MAD)',
+        destination: 'Changi (SIN)',
+        status: 'departed',
+        eta: '4:31 PM UTC',
+        fullText: 'Ryanair Airbus A321neo flight FR7013 departed Madrid Barajas (MAD) on route to Changi (SIN) estimated arrival at 4:31 PM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'WN612',
+        time: '2026-11-17 10:06:06.558 CET',
+        airline: 'WN',
+        airlineName: 'Southwest Airlines',
+        aircraft: 'Airbus A380-800',
+        origin: 'Phoenix Sky Harbor International (PHX)',
+        destination: 'Schiphol (AMS)',
+        status: 'departed',
+        eta: '10:26 AM UTC',
+        fullText: 'Southwest Airlines Airbus A380-800 flight WN612 departed Phoenix Sky Harbor International (PHX) on route to Schiphol (AMS) estimated arrival at 10:26 AM UTC.',
+        source: 'Onboarding • Real-time fli...'
+      },
+      {
+        id: 'JL8159',
+        time: '2026-11-17 10:06:10.207 CET',
+        airline: 'JL',
+        airlineName: 'Japan Airlines',
+        aircraft: 'Airbus A350-1000',
+        origin: 'Changi (SIN)',
+        destination: 'Madrid Barajas (MAD)',
+        status: 'landed',
+        earlyMinutes: 9,
+        fullText: 'Japan Airlines Airbus A350-1000 flight JL8159 from Changi (SIN) landed at Madrid Barajas (MAD) 9 minutes ahead of schedule.',
+        source: 'Onboarding • Real-time fli...'
+      }
+    ];
+
+    // Simulated new logs when user clicks "+ Emit Log"
+    const SIMULATED_EVENTS = [
+      {
+        id: 'BA1482',
+        airline: 'BA',
+        airlineName: 'British Airways',
+        aircraft: 'Boeing 777-300ER',
+        origin: 'Heathrow (LHR)',
+        destination: 'Tokyo Haneda (HND)',
+        status: 'departed',
+        eta: '6:45 PM UTC',
+        fullText: 'British Airways Boeing 777-300ER flight BA1482 departed Heathrow (LHR) on route to Tokyo Haneda (HND) estimated arrival at 6:45 PM UTC.'
+      },
+      {
+        id: 'SQ322',
+        airline: 'SQ',
+        airlineName: 'Singapore Airlines',
+        aircraft: 'Airbus A380-800',
+        origin: 'Changi (SIN)',
+        destination: 'Heathrow (LHR)',
+        status: 'landed',
+        earlyMinutes: 11,
+        fullText: 'Singapore Airlines Airbus A380-800 flight SQ322 from Changi (SIN) landed at Heathrow (LHR) 11 minutes ahead of schedule.'
+      },
+      {
+        id: 'KL1019',
+        airline: 'KL',
+        airlineName: 'KLM Royal Dutch Airlines',
+        aircraft: 'Boeing 787-10',
+        origin: 'Schiphol (AMS)',
+        destination: 'Heathrow (LHR)',
+        status: 'landed',
+        earlyMinutes: 5,
+        fullText: 'KLM Royal Dutch Airlines Boeing 787-10 flight KL1019 from Schiphol (AMS) landed at Heathrow (LHR) 5 minutes ahead of schedule.'
+      },
+      {
+        id: 'LH404',
+        airline: 'LH',
+        airlineName: 'Lufthansa',
+        aircraft: 'Airbus A350-900',
+        origin: 'Munich Airport (MUC)',
+        destination: 'Heathrow (LHR)',
+        status: 'departed',
+        eta: '1:15 PM UTC',
+        fullText: 'Lufthansa Airbus A350-900 flight LH404 departed Munich Airport (MUC) on route to Heathrow (LHR) estimated arrival at 1:15 PM UTC.'
+      }
+    ];
+
+    // State
+    let allLogs = [...INITIAL_LOGS];
+    let searchQuery = '';
+    let activePresetName = 'Presets';
+    let timeRange = 'Last 30 days';
+    let isSidebarOpen = false;
+    let simCounter = 0;
+    let hasUserAsked = false;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      renderHistogram();
+      renderLogTable();
+      updateContextAwareness();
+    });
+
+    // Close Presets dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('presetsMenu');
+      const btn = document.getElementById('presetsBtn');
+      if (menu && !menu.contains(e.target) && !btn.contains(e.target)) {
+        menu.classList.add('hidden');
+      }
+    });
+
+    function togglePresetsMenu() {
+      document.getElementById('presetsMenu').classList.toggle('hidden');
+    }
+
+    function applyPreset(label, query) {
+      activePresetName = label === 'All flights' ? 'Presets' : label;
+      document.getElementById('activePresetLabel').textContent = activePresetName;
+      const input = document.getElementById('searchInput');
+      input.value = query;
+      handleSearchInput(query);
+      document.getElementById('presetsMenu').classList.add('hidden');
+    }
+
+    function handleSearchInput(val) {
+      searchQuery = val.trim();
+      const clearBtn = document.getElementById('clearSearchBtn');
+      if (searchQuery.length > 0) {
+        clearBtn.classList.remove('hidden');
+      } else {
+        clearBtn.classList.add('hidden');
+        if (activePresetName !== 'Presets') {
+          activePresetName = 'Presets';
+          document.getElementById('activePresetLabel').textContent = 'Presets';
+        }
+      }
+      renderLogTable();
+      updateContextAwareness();
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('searchInput');
+      input.value = '';
+      activePresetName = 'Presets';
+      document.getElementById('activePresetLabel').textContent = 'Presets';
+      handleSearchInput('');
+    }
+
+    function handleTimeRangeChange(val) {
+      timeRange = val;
+      updateContextAwareness();
+    }
+
+    function scrollToLatestLog() {
+      const tbody = document.getElementById('logTableBody');
+      tbody.scrollTo({ top: tbody.scrollHeight, behavior: 'smooth' });
+    }
+
+    function simulateNewFlightEvent() {
+      const tpl = SIMULATED_EVENTS[simCounter % SIMULATED_EVENTS.length];
+      simCounter++;
+      const now = new Date();
+      const pad = (n, z = 2) => ('00' + n).slice(-z);
+      const ts = `2026-11-17 ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3)} CET`;
+
+      allLogs.push({
+        ...tpl,
+        time: ts,
+        source: 'Onboarding • Real-time fli...'
+      });
+
+      renderLogTable(true);
+      updateContextAwareness();
+      scrollToLatestLog();
+    }
+
+    // Filter currently visible logs based on live searchQuery
+    function getFilteredLogs() {
+      if (!searchQuery) return allLogs;
+      const q = searchQuery.toLowerCase();
+      return allLogs.filter(log =>
+        log.id.toLowerCase().includes(q) ||
+        log.airline.toLowerCase().includes(q) ||
+        log.airlineName.toLowerCase().includes(q) ||
+        log.aircraft.toLowerCase().includes(q) ||
+        log.origin.toLowerCase().includes(q) ||
+        log.destination.toLowerCase().includes(q) ||
+        log.fullText.toLowerCase().includes(q) ||
+        log.time.toLowerCase().includes(q)
+      );
+    }
+
+    // Render Histogram Chart (Oct 21 - Nov 17, spike on Nov 3 and tall bar on Nov 17)
+    function renderHistogram() {
+      const grid = document.getElementById('histogramGrid');
+      const tooltip = document.getElementById('histTooltip');
+      grid.querySelectorAll('.hist-bar').forEach(b => b.remove());
+
+      const buckets = 84;
+      for (let i = 0; i < buckets; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'hist-bar w-[3.5px] rounded-t-xs transition-all duration-200 cursor-pointer';
+
+        let label = '0 events';
+        if (i === 43) {
+          bar.style.height = '18%';
+          bar.style.backgroundColor = '#6366f1';
+          label = 'Nov 3, 2026: 27 events';
+        } else if (i === buckets - 1) {
+          bar.style.height = '88%';
+          bar.style.backgroundColor = '#7c82f8';
+          label = 'Nov 17, 2026: 132 events';
+        } else {
+          bar.style.height = '3%';
+          bar.style.backgroundColor = 'transparent';
+        }
+
+        if (i === 43 || i === buckets - 1) {
+          bar.addEventListener('mouseenter', () => {
+            tooltip.textContent = label;
+            tooltip.classList.remove('hidden');
+          });
+          bar.addEventListener('mouseleave', () => {
+            tooltip.classList.add('hidden');
+          });
+        }
+        grid.appendChild(bar);
+      }
+    }
+
+    // Render Log Table Rows matching Screenshot 1
+    function renderLogTable(highlightLast = false) {
+      const tbody = document.getElementById('logTableBody');
+      const filtered = getFilteredLogs();
+      document.getElementById('visibleCountBadge').textContent = filtered.length;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <div class="py-12 text-center text-[#8b94ab] font-sans">
+            <p class="text-[13px] font-medium text-white mb-1">No matching flight telemetry rows</p>
+            <p class="text-[12px]">Clear your search filter <code class="px-1.5 py-0.5 rounded bg-[#1e2332] text-indigo-300">${escapeHtml(searchQuery)}</code> to view all logs.</p>
+          </div>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map((log, idx) => {
+        const isNew = highlightLast && idx === filtered.length - 1;
+        return `
+          <div class="grid grid-cols-12 px-4 py-2 hover:bg-[#191e2c] transition-colors items-start gap-2 ${isNew ? 'new-log-row' : ''}">
+            <div class="col-span-3 sm:col-span-2 text-[#8b94ab] text-[11px] leading-relaxed whitespace-nowrap overflow-hidden text-ellipsis">
+              ${escapeHtml(log.time)}
+            </div>
+
+            <div class="col-span-9 sm:col-span-5 text-[#d1d7e6] leading-[1.55] break-words">
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded bg-[#212738] border border-[#2f374f] text-[10.5px] mr-1">
+                <span class="text-[#8b94ab]">airline:</span><span class="text-[#e2e6f0] font-medium">${escapeHtml(log.airline)}</span>
+              </span>
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded bg-[#212738] border border-[#2f374f] text-[10.5px] mr-1">
+                <span class="text-[#8b94ab]">id:</span><span class="text-[#e2e6f0] font-medium">${escapeHtml(log.id)}</span>
+              </span>
+              <span class="inline-flex items-center px-1.5 py-0.2 rounded bg-[#212738] border border-[#2f374f] text-[10.5px] mr-1.5">
+                <span class="text-[#8b94ab]">aircraft:</span><span class="text-[#e2e6f0] font-medium">${escapeHtml(log.aircraft)}</span>
+              </span>
+              <span class="text-[#cbd5e1] font-sans text-[12px]">${escapeHtml(log.fullText)}</span>
+            </div>
+
+            <div class="hidden sm:flex sm:col-span-2 items-center gap-1.5 text-[#8b94ab] text-[11px] truncate pt-0.5">
+              <svg class="w-3 h-3 text-[#5e677e] shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg>
+              <span class="truncate font-sans">${escapeHtml(log.source)}</span>
+            </div>
+
+            <div class="hidden lg:block lg:col-span-1 text-[#cbd5e1] font-sans text-[11.5px] leading-snug pt-0.5">
+              ${escapeHtml(log.origin)}
+            </div>
+
+            <div class="hidden lg:block lg:col-span-1 text-[#cbd5e1] font-sans text-[11.5px] leading-snug pt-0.5">
+              ${escapeHtml(log.destination)}
+            </div>
+
+            <div class="hidden sm:block sm:col-span-3 lg:col-span-1 text-[#cbd5e1] text-[11.5px] pt-0.5">
+              ${escapeHtml(log.airline)}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== AI SIDEBAR TOGGLE & DYNAMIC CONTEXT ====================
+
+    function toggleAiSidebar(forceOpen) {
+      const sidebar = document.getElementById('aiSidebar');
+      const fab = document.getElementById('aiAgentFab');
+      isSidebarOpen = typeof forceOpen === 'boolean' ? forceOpen : !isSidebarOpen;
+
+      if (isSidebarOpen) {
+        sidebar.classList.remove('w-0', 'opacity-0', 'pointer-events-none');
+        sidebar.classList.add('w-[380px]', 'sm:w-[420px]', 'opacity-100', 'pointer-events-auto');
+        fab.classList.add('opacity-0', 'pointer-events-none', 'scale-90');
+        updateContextAwareness();
+        setTimeout(() => {
+          document.getElementById('aiPromptInput').focus();
+        }, 250);
+      } else {
+        sidebar.classList.add('w-0', 'opacity-0', 'pointer-events-none');
+        sidebar.classList.remove('w-[380px]', 'sm:w-[420px]', 'opacity-100', 'pointer-events-auto');
+        fab.classList.remove('opacity-0', 'pointer-events-none', 'scale-90');
+      }
+    }
+
+    function getCurrentContextLabel() {
+      const count = getFilteredLogs().length;
+      const parts = [`Live tail · Onboarding • Real-time flights (${count} visible rows)`];
+      if (activePresetName !== 'Presets') {
+        parts.push(`preset: ${activePresetName}`);
+      } else if (searchQuery) {
+        parts.push(`filter: "${searchQuery}"`);
+      }
+      return parts.join(' · ');
+    }
+
+    function updateContextAwareness() {
+      const pill = document.getElementById('contextPillText');
+      if (pill) {
+        pill.textContent = getCurrentContextLabel();
+      }
+    }
+
+    function resetConversation() {
+      hasUserAsked = false;
+      document.getElementById('sidebarConvTitle').textContent = 'Live tail • Real-time flights';
+      document.getElementById('chatMessages').innerHTML = `
+        <div id="chatWelcomeState" class="space-y-4">
+          <div class="p-3.5 rounded-xl bg-[#1c2130] border border-[#2a3247] space-y-2">
+            <div class="flex items-center gap-2 text-indigo-300 font-medium text-[12.5px]">
+              <svg class="w-4 h-4 text-indigo-400" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+              </svg>
+              <span>Full-Page Screen Context Active</span>
+            </div>
+            <p class="text-[12px] text-[#9aa3ba] leading-relaxed">
+              Ask questions about the flight logs, histogram spikes, search filters, or visible rows currently on your <strong class="text-white">Live tail</strong> screen.
+            </p>
+          </div>
+          <div class="space-y-2">
+            <div class="text-[11px] font-medium text-[#626b82] uppercase tracking-wider px-0.5">Suggested questions</div>
+            <div class="flex flex-col gap-1.5">
+              <button onclick="sendSuggestedPrompt('Summarize current screen flights')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                <span>Summarize current screen flights</span>
+                <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+              </button>
+              <button onclick="sendSuggestedPrompt('Which flights landed ahead of schedule?')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                <span>Which flights landed ahead of schedule?</span>
+                <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+              </button>
+              <button onclick="sendSuggestedPrompt('Breakdown by airline & aircraft')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                <span>Breakdown by airline &amp; aircraft</span>
+                <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+              </button>
+              <button onclick="sendSuggestedPrompt('Any anomalies or delays?')" class="text-left px-3 py-2 rounded-lg bg-[#1b202e] hover:bg-[#23293b] border border-[#2a3247] hover:border-indigo-500/50 text-[#d1d7e6] text-[12px] transition flex items-center justify-between group">
+                <span>Any anomalies or delays?</span>
+                <span class="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function sendSuggestedPrompt(text) {
+      document.getElementById('aiPromptInput').value = text;
+      submitUserPrompt();
+    }
+
+    function handlePromptKeydown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitUserPrompt();
+      }
+    }
+
+    function submitUserPrompt() {
+      const input = document.getElementById('aiPromptInput');
+      const question = input.value.trim();
+      if (!question) return;
+
+      if (!hasUserAsked) {
+        hasUserAsked = true;
+        const titleEl = document.getElementById('sidebarConvTitle');
+        titleEl.textContent = question.length > 34 ? question.slice(0, 34) + '...' : question;
+        const welcome = document.getElementById('chatWelcomeState');
+        if (welcome) welcome.remove();
+      }
+
+      input.value = '';
+      const snapshotContext = getCurrentContextLabel();
+      appendUserMessage(question, snapshotContext);
+
+      const loadingId = appendLoadingAssistantMessage();
+
+      // Simulate brief local DOM/context analysis delay for natural UX
+      setTimeout(() => {
+        const loadingEl = document.getElementById(loadingId);
+        if (loadingEl) loadingEl.remove();
+
+        const analysis = analyzeLiveScreenContext(question);
+        appendAssistantMessage(analysis.answer, analysis.reasoning, analysis.followUps);
+      }, 360);
+    }
+
+    // ==================== 100% LOCAL FULL-PAGE CONTEXT INTELLIGENCE ENGINE ====================
+    function analyzeLiveScreenContext(rawQuestion) {
+      const q = rawQuestion.toLowerCase();
+      const visibleLogs = getFilteredLogs();
+      const totalBuffered = allLogs.length;
+      const filterDesc = searchQuery ? `active filter \`${searchQuery}\`` : 'no active search filter';
+
+      if (visibleLogs.length === 0) {
+        return {
+          reasoning: `Inspected DOM telemetry table (${totalBuffered} buffered events). Applied ${filterDesc} over "${timeRange}", resulting in 0 matching rows.`,
+          answer: `There are currently **0 visible flight rows** matching ${filterDesc}.\n\nClick **✕** in the top search bar or choose **All flights** under **Presets** to restore the full live tail stream.`,
+          followUps: ['Summarize current screen flights']
+        };
+      }
+
+      const landedLogs = visibleLogs.filter(l => l.status === 'landed');
+      const departedLogs = visibleLogs.filter(l => l.status === 'departed');
+      const earlyLogs = visibleLogs.filter(l => l.earlyMinutes && l.earlyMinutes > 0);
+
+      // Count airlines & aircraft dynamically from visible rows
+      const airlineMap = {};
+      const aircraftMap = {};
+      const airportTraffic = {};
+
+      visibleLogs.forEach(l => {
+        const aKey = `${l.airlineName} (${l.airline})`;
+        airlineMap[aKey] = (airlineMap[aKey] || 0) + 1;
+        aircraftMap[l.aircraft] = (aircraftMap[l.aircraft] || 0) + 1;
+        airportTraffic[l.origin] = (airportTraffic[l.origin] || 0) + 1;
+        airportTraffic[l.destination] = (airportTraffic[l.destination] || 0) + 1;
+      });
+
+      const topAirlines = Object.entries(airlineMap).sort((a, b) => b[1] - a[1]);
+      const topAircraft = Object.entries(aircraftMap).sort((a, b) => b[1] - a[1]);
+      const topAirports = Object.entries(airportTraffic).sort((a, b) => b[1] - a[1]);
+
+      // 1. Ahead of schedule / Early arrivals
+      if (q.includes('ahead') || q.includes('early') || q.includes('schedule') || q.includes('fast')) {
+        if (earlyLogs.length === 0) {
+          return {
+            reasoning: `Scanned ${visibleLogs.length} visible telemetry rows (${filterDesc}) for early arrival schedule variance metrics; found 0 early landings in this filtered subset.`,
+            answer: `None of the **${visibleLogs.length} visible rows** under ${filterDesc} recorded an early arrival.\n\nClear your search filter to view all **${allLogs.filter(l => l.earlyMinutes > 0).length} early landings** across the stream.`,
+            followUps: ['Summarize current screen flights', 'Breakdown by airline & aircraft']
+          };
+        }
+
+        const tableRows = earlyLogs
+          .sort((a, b) => b.earlyMinutes - a.earlyMinutes)
+          .map(l => `| **${l.id}** | ${l.airlineName} (\`${l.airline}\`) | ${l.origin} → ${l.destination} | **${l.earlyMinutes} min early** |`)
+          .join('\n');
+
+        return {
+          reasoning: `Inspected ${visibleLogs.length} visible rows in Live tail (${filterDesc}). Filtered for landed events with positive schedule variance (>0 min ahead of schedule), identifying ${earlyLogs.length} flights.`,
+          answer: `**${earlyLogs.length} flights** on screen landed ahead of schedule (averaging **${(earlyLogs.reduce((s, x) => s + x.earlyMinutes, 0) / earlyLogs.length).toFixed(1)} mins early**):\n\n| Flight | Airline | Route | Variance |\n|---|---|---|---|\n${tableRows}`,
+          followUps: ['Summarize current screen flights', 'Any anomalies or delays?']
+        };
+      }
+
+      // 2. Anomalies / Delays / Unusual equipment
+      if (q.includes('anomal') || q.includes('delay') || q.includes('late') || q.includes('issue') || q.includes('error') || q.includes('unusual')) {
+        const unusualFleet = visibleLogs.filter(l =>
+          (l.airline === 'WN' && l.aircraft.includes('A380')) ||
+          (l.airline === 'EK' && l.aircraft.includes('CRJ-900')) ||
+          (l.airline === 'FR' && l.destination.includes('SIN'))
+        );
+
+        const anomalyBullets = unusualFleet.map(l =>
+          `- **${l.id}** (\`${l.airline}\`): ${l.airlineName} operating **${l.aircraft}** on route **${l.origin} → ${l.destination}**`
+        ).join('\n');
+
+        return {
+          reasoning: `Evaluated ${visibleLogs.length} visible telemetry messages, histogram spike distribution (Nov 3 & Nov 17), arrival status flags, and airline-to-aircraft pairings for operational anomalies.`,
+          answer: `**0 flight delays or error alerts** are present in the ${visibleLogs.length} visible rows—all landed flights arrived on time or up to **15 minutes early**.\n\nHowever, **${unusualFleet.length} notable fleet/route anomalies** stand out in the telemetry stream:\n${anomalyBullets || '- No fleet-pairing anomalies in the current filter.'}\n\nAdditionally, the timeline histogram shows an ingestion burst on **Nov 17** (~132 events) following a smaller spike on **Nov 3** (~27 events).`,
+          followUps: ['Breakdown by airline & aircraft', 'Which flights landed ahead of schedule?']
+        };
+      }
+
+      // 3. Breakdown by airline & aircraft
+      if (q.includes('airline') || q.includes('aircraft') || q.includes('fleet') || q.includes('breakdown') || q.includes('boeing') || q.includes('airbus')) {
+        const airlineRows = topAirlines
+          .map(([name, count]) => `| **${name}** | ${count} | ${Math.round((count / visibleLogs.length) * 100)}% |`)
+          .join('\n');
+
+        const aircraftBullets = topAircraft
+          .map(([model, count]) => `- **${model}**: ${count} flight${count > 1 ? 's' : ''}`)
+          .join('\n');
+
+        return {
+          reasoning: `Grouped ${visibleLogs.length} visible telemetry logs (${filterDesc}) by \`airline\` and \`aircraft\` structured badge tags.`,
+          answer: `Across the **${visibleLogs.length} visible rows**, **${topAirlines.length} airlines** and **${topAircraft.length} aircraft models** are active:\n\n| Airline | Flights | Share |\n|---|---|---|\n${airlineRows}\n\n**Aircraft Fleet Mix:**\n${aircraftBullets}`,
+          followUps: ['Summarize current screen flights', 'Any anomalies or delays?']
+        };
+      }
+
+      // 4. Specific airport / city / flight ID query (e.g. LHR, Heathrow, Miami, LH5234, Southwest)
+      const specificMatches = visibleLogs.filter(l => {
+        const tokens = q.replace(/[?.,!]/g, '').split(/\s+/).filter(t => t.length >= 2 && !['show', 'list', 'find', 'what', 'which', 'flights', 'flight', 'from', 'with', 'the', 'are', 'in', 'on', 'screen', 'current', 'about', 'tell', 'me'].includes(t));
+        return tokens.some(tok =>
+          l.id.toLowerCase().includes(tok) ||
+          l.airline.toLowerCase() === tok ||
+          l.airlineName.toLowerCase().includes(tok) ||
+          l.origin.toLowerCase().includes(tok) ||
+          l.destination.toLowerCase().includes(tok) ||
+          l.aircraft.toLowerCase().includes(tok)
+        );
+      });
+
+      if (!q.includes('summar') && !q.includes('overview') && !q.includes('all') && specificMatches.length > 0 && specificMatches.length < visibleLogs.length) {
+        const rows = specificMatches
+          .map(l => `| **${l.id}** | ${l.airlineName} | ${l.aircraft} | ${l.origin} → ${l.destination} | ${l.status === 'landed' ? (l.earlyMinutes > 0 ? `Landed (${l.earlyMinutes}m early)` : 'Landed') : `En route (ETA ${l.eta})`} |`)
+          .join('\n');
+
+        return {
+          reasoning: `Matched query terms against structured fields (\`id\`, \`airline\`, \`aircraft\`, \`Origin\`, \`Destination\`) across ${visibleLogs.length} visible rows, finding ${specificMatches.length} matching flight(s).`,
+          answer: `Found **${specificMatches.length} matching flight${specificMatches.length > 1 ? 's' : ''}** in the current Live tail view:\n\n| Flight | Airline | Aircraft | Route | Status |\n|---|---|---|---|---|\n${rows}`,
+          followUps: ['Summarize current screen flights', 'Breakdown by airline & aircraft']
+        };
+      }
+
+      // 5. Default Comprehensive Screen Summary ("Summarize current screen flights" or general queries)
+      const firstTs = visibleLogs[0].time.split(' ')[1];
+      const lastTs = visibleLogs[visibleLogs.length - 1].time.split(' ')[1];
+      const topHubs = topAirports.slice(0, 3).map(([ap, cnt]) => `**${ap}** (${cnt})`).join(', ');
+
+      return {
+        reasoning: `Aggregated full-page state: source "Onboarding • Real-time flights", time window "${timeRange}", ${filterDesc}, histogram activity, and ${visibleLogs.length} visible log rows (${firstTs}–${lastTs} CET).`,
+        answer: `Here is a live summary of the **${visibleLogs.length} visible flight telemetry rows** (${firstTs} – ${lastTs} CET):\n\n| Metric | Current Screen Value |\n|---|---|\n| **Visible Events** | ${visibleLogs.length} of ${totalBuffered} buffered logs |\n| **Landed / En Route** | **${landedLogs.length} landed** · **${departedLogs.length} departed** |\n| **Early Arrivals** | **${earlyLogs.length} flights** (up to 15 min ahead of schedule) |\n| **Top Carrier** | **${topAirlines[0][0]}** (${topAirlines[0][1]} flights) |\n| **Busiest Airports** | ${topHubs} |\n\n- **Fastest arrival:** **UA6470** (United Airlines \`Airbus A350-1000\`) landed at Changi (SIN) **15 minutes early**, followed by **LH5234** (**14 minutes early** at LAX).\n- **Timeline activity:** Ingestion spiked on **Nov 17** (~132 events) after a smaller burst on **Nov 3**.`,
+        followUps: ['Which flights landed ahead of schedule?', 'Breakdown by airline & aircraft', 'Any anomalies or delays?']
+      };
+    }
+
+    // ==================== CHAT UI RENDERING HELPERS ====================
+
+    function appendUserMessage(text, contextLabel) {
+      const container = document.getElementById('chatMessages');
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'space-y-1.5';
+      wrapper.innerHTML = `
+        <div class="flex items-center gap-2 text-[11px]">
+          <span class="w-5 h-5 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 font-semibold text-[10px] flex items-center justify-center">YT</span>
+          <span class="font-semibold text-[#e2e6f0]">You</span>
+          <span class="text-[#626b82]">· ${nowTime}</span>
+        </div>
+        <div class="p-3 rounded-xl bg-[#22293d] border border-[#313b57] text-[#f1f5f9] text-[12.5px] leading-relaxed">
+          ${escapeHtml(text)}
+        </div>
+        <div>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[#1b202e] border border-[#2b3349] text-[10.5px] text-[#9aa3ba] max-w-full">
+            <svg class="w-3 h-3 text-indigo-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+            </svg>
+            <span class="truncate">${escapeHtml(contextLabel)}</span>
+          </span>
+        </div>
+      `;
+      container.appendChild(wrapper);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function appendLoadingAssistantMessage() {
+      const container = document.getElementById('chatMessages');
+      const id = 'loading-' + Date.now();
+      const wrapper = document.createElement('div');
+      wrapper.id = id;
+      wrapper.className = 'space-y-2';
+      wrapper.innerHTML = `
+        <div class="flex items-center gap-2 text-[11px]">
+          <span class="w-5 h-5 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 text-white flex items-center justify-center shadow-xs">
+            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+          </span>
+          <span class="font-semibold text-[#e2e6f0]">Better Stack AI Assistant</span>
+          <span class="text-[#626b82]">· inspecting screen...</span>
+        </div>
+        <div class="px-3.5 py-3 rounded-xl bg-[#1b202e] border border-[#2a3247] inline-flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+        </div>
+      `;
+      container.appendChild(wrapper);
+      container.scrollTop = container.scrollHeight;
+      return id;
+    }
+
+    function appendAssistantMessage(markdownAnswer, reasoningText, followUps = []) {
+      const container = document.getElementById('chatMessages');
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const reasoningId = 'reason-' + Date.now() + Math.floor(Math.random() * 1000);
+
+      const followUpHtml = followUps.length > 0 ? `
+        <div class="flex flex-wrap gap-1.5 pt-1">
+          ${followUps.map(fu => `
+            <button onclick="sendSuggestedPrompt('${escapeAttr(fu)}')" class="px-2.5 py-1 rounded-md bg-[#1b202e] hover:bg-[#242b3e] border border-[#2b344d] hover:border-indigo-500/50 text-[11px] text-indigo-300 transition">
+              ${escapeHtml(fu)}
+            </button>
+          `).join('')}
+        </div>
+      ` : '';
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'space-y-2';
+      wrapper.innerHTML = `
+        <div class="flex items-center gap-2 text-[11px]">
+          <span class="w-5 h-5 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 text-white flex items-center justify-center shadow-xs">
+            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+          </span>
+          <span class="font-semibold text-[#e2e6f0]">Better Stack AI Assistant</span>
+          <span class="text-[#626b82]">· ${nowTime}</span>
+        </div>
+
+        <!-- Collapsible Reasoning > toggle -->
+        <div>
+          <button onclick="toggleReasoning('${reasoningId}')" class="inline-flex items-center gap-1 text-[11.5px] font-medium text-[#8b94ab] hover:text-indigo-300 transition">
+            <span>Reasoning</span>
+            <svg id="${reasoningId}-chevron" class="w-3 h-3 transition-transform duration-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
+          <div id="${reasoningId}" class="hidden mt-1.5 p-2.5 rounded-lg bg-[#141824] border border-[#242a3a] text-[11.5px] text-[#9aa3ba] leading-relaxed">
+            ${escapeHtml(reasoningText)}
+          </div>
+        </div>
+
+        <!-- Formatted Markdown Response -->
+        <div class="ai-markdown text-[12.5px] text-[#e2e6f0] overflow-x-auto">
+          ${renderSimpleMarkdown(markdownAnswer)}
+        </div>
+
+        ${followUpHtml}
+
+        <!-- Actionable Feedback & Copy Footer -->
+        <div class="flex items-center gap-3 pt-0.5 text-[#626b82] text-[11px]">
+          <button onclick="toggleThumbFeedback(this)" class="hover:text-emerald-400 transition flex items-center gap-1" title="Helpful response">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6.633 10.5c.806 0 1.533-.446 2.031-1.08a9.041 9.041 0 012.861-2.4c.723-.384 1.35-.956 1.653-1.715a4.498 4.498 0 00.322-1.672V3a.75.75 0 01.75-.75A2.25 2.25 0 0116.5 4.5c0 1.152-.26 2.243-.723 3.218-.266.558.107 1.282.725 1.282h3.126c1.026 0 1.945.694 2.054 1.715.045.422.068.85.068 1.285a11.95 11.95 0 01-2.649 7.521c-.388.482-.987.729-1.605.729H13.48c-.483 0-.964-.078-1.423-.23l-3.114-1.04a4.501 4.501 0 00-1.423-.23H5.904M14.25 9h2.25M5.904 18.75c.083.205.173.405.27.602.197.4-.078.898-.523.898h-.908c-.889 0-1.713-.518-1.972-1.368a12 12 0 01-.521-3.507c0-1.553.295-3.036.831-4.398C3.387 10.203 4.167 9.75 5 9.75h1.053c.472 0 .745.556.5.96a8.958 8.958 0 00-1.302 4.665c0 1.194.232 2.333.654 3.375z" />
+            </svg>
+          </button>
+          <button onclick="copyMessageText(this)" data-raw="${escapeAttr(markdownAnswer)}" class="hover:text-[#cbd5e1] transition flex items-center gap-1" title="Copy response">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+            </svg>
+          </button>
+          <span class="inline-flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            0.4s
+          </span>
+        </div>
+      `;
+      container.appendChild(wrapper);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function toggleReasoning(id) {
+      const box = document.getElementById(id);
+      const chevron = document.getElementById(id + '-chevron');
+      if (box) {
+        box.classList.toggle('hidden');
+        chevron.classList.toggle('rotate-90');
+      }
+    }
+
+    function toggleThumbFeedback(btn) {
+      btn.classList.toggle('text-emerald-400');
+    }
+
+    function copyMessageText(btn) {
+      const text = btn.getAttribute('data-raw') || '';
+      const temp = document.createElement('textarea');
+      temp.value = text;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+      btn.innerHTML = '<span class="text-emerald-400 text-[10px]">Copied</span>';
+      setTimeout(() => {
+        btn.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" /></svg>`;
+      }, 1500);
+    }
+
+    function renderSimpleMarkdown(md) {
+      const lines = md.split('\n');
+      let html = '';
+      let inTable = false;
+      let inList = false;
+
+      const formatInline = (str) => {
+        let s = escapeHtml(str);
+        s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+        return s;
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        if (line.startsWith('|') && line.endsWith('|')) {
+          if (inList) { html += '</ul>'; inList = false; }
+          const cells = line.slice(1, -1).split('|').map(c => c.trim());
+          if (cells.every(c => /^[-:]+$/.test(c))) continue;
+
+          if (!inTable) {
+            inTable = true;
+            html += '<div class="rounded-lg border border-[#2a3247] overflow-hidden my-2"><table><thead><tr>';
+            cells.forEach(c => { html += `<th>${formatInline(c)}</th>`; });
+            html += '</tr></thead><tbody>';
+          } else {
+            html += '<tr>';
+            cells.forEach(c => { html += `<td>${formatInline(c)}</td>`; });
+            html += '</tr>';
+          }
+          continue;
+        } else if (inTable) {
+          html += '</tbody></table></div>';
+          inTable = false;
+        }
+
+        if (line.startsWith('- ') || line.startsWith('* ')) {
+          if (!inList) {
+            inList = true;
+            html += '<ul>';
+          }
+          html += `<li>${formatInline(line.slice(2))}</li>`;
+          continue;
+        } else if (inList) {
+          html += '</ul>';
+          inList = false;
+        }
+
+        if (line.length > 0) {
+          html += `<p>${formatInline(line)}</p>`;
+        }
+      }
+
+      if (inTable) html += '</tbody></table></div>';
+      if (inList) html += '</ul>';
+      return html;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(str) {
+      return String(str).replace(/"/g, '&quot;').replace(/\n/g, ' ');
+    }
+  </script>
+</body>
+</html>
